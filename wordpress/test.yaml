@@ -1,0 +1,659 @@
+Parameters:
+  DBName:
+    Type: String
+    Default: wordpressdb
+  DBUser:
+    Type: String
+    Default: wordpress-user
+  DBPassword:
+    Type: String
+    NoEcho: true
+  DBRootPassword:
+    Type: String
+    NoEcho: true
+
+Resources:
+
+  ###################################################
+  # Virtual Private Cloud ###########################
+  ###################################################
+
+  GhostVPC:
+    Type: "AWS::EC2::VPC"
+    Properties:
+      CidrBlock: "10.16.0.0/16"
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      InstanceTenancy: "default"
+      Tags:
+        - Key: "Name"
+          Value: "ghost-vpc"
+
+  # Internet Gateway ###########################
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    # Properties:
+
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref GhostVPC
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref GhostVPC
+
+  DefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref RouteTable
+
+  # NAT Gateway ###########################
+  NatEip:
+    Type: AWS::EC2::EIP
+    DependsOn: GatewayAttachment
+    Properties:
+      Domain: vpc
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    DependsOn:
+      - DefaultRoute
+      - SubnetRouteTableAssociationPublicA
+    Properties:
+      AllocationId: !GetAtt NatEip.AllocationId
+      SubnetId: !Ref SubnetPublicA
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref GhostVPC
+
+  PrivateDefaultRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: "0.0.0.0/0"
+      NatGatewayId: !Ref NatGateway
+
+  # Subnet Route Table Associations ##############
+
+  SubnetRouteTableAssociationPublicA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RouteTable
+      SubnetId: !Ref SubnetPublicA
+    
+  SubnetRouteTableAssociationPublicB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RouteTable
+      SubnetId: !Ref SubnetPublicB
+
+  SubnetRouteTableAssociationPublicC:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RouteTable
+      SubnetId: !Ref SubnetPublicC
+
+  SubnetRouteTableAssociationAppA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref SubnetAppA
+
+  SubnetRouteTableAssociationAppB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref SubnetAppB
+
+  SubnetRouteTableAssociationAppC:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref SubnetAppC
+
+  SubnetRouteTableAssociationDBA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref SubnetDbA
+
+  # Security Groups ##############################
+  ALBSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: "security group for ALB"
+      VpcId: !Ref GhostVPC
+      SecurityGroupIngress:
+        - CidrIp: "0.0.0.0/0"
+          IpProtocol: "tcp"
+          FromPort: 80 # 
+          ToPort: 80  # 
+
+  AppSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: "security group for wordpress"
+      VpcId: !Ref GhostVPC
+      SecurityGroupIngress:
+        - SourceSecurityGroupId: !GetAtt ALBSecurityGroup.GroupId
+          IpProtocol: "tcp"
+          FromPort: 80 # 
+          ToPort: 80  # 
+
+  DbSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: "security group for DB"
+      VpcId: !Ref GhostVPC
+      SecurityGroupIngress:
+        - SourceSecurityGroupId: !GetAtt AppSecurityGroup.GroupId
+          IpProtocol: "tcp"
+          FromPort: 3306 # 
+          ToPort: 3306  # 
+
+  EfsSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: "security group for EFS"
+      VpcId: !Ref GhostVPC
+      SecurityGroupIngress:
+        - SourceSecurityGroupId: !GetAtt AppSecurityGroup.GroupId
+          IpProtocol: "tcp"
+          FromPort: 2049 #
+          ToPort: 2049 #
+
+
+  # App Subnets ############################
+  SubnetAppA:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      AvailabilityZone: 
+        Fn::Select:
+          - 0
+          - Fn::GetAZs: !Ref "AWS::Region" 
+      VpcId: !Ref GhostVPC
+      CidrBlock: "10.16.0.0/20"
+  SubnetAppB:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      AvailabilityZone: 
+        Fn::Select:
+          - 1
+          - Fn::GetAZs: !Ref "AWS::Region" 
+      VpcId: !Ref GhostVPC
+      CidrBlock: "10.16.48.0/20"
+  SubnetAppC:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      AvailabilityZone: 
+        Fn::Select:
+          - 2
+          - Fn::GetAZs: !Ref "AWS::Region" 
+      VpcId: !Ref GhostVPC
+      CidrBlock: "10.16.96.0/20"
+
+  # EFS Subnets ############################
+  SubnetEfsA:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      AvailabilityZone: !Select [ 0, !GetAZs '']
+      VpcId: !Ref GhostVPC
+      CidrBlock: "10.16.16.0/20"
+  SubnetEfsB:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      AvailabilityZone: 
+        Fn::Select:
+          - 1
+          - Fn::GetAZs: !Ref "AWS::Region" 
+      VpcId: !Ref GhostVPC
+      CidrBlock: "10.16.64.0/20"
+  SubnetEfsC:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      AvailabilityZone: 
+        Fn::Select:
+          - 2
+          - Fn::GetAZs: !Ref "AWS::Region" 
+      VpcId: !Ref GhostVPC
+      CidrBlock: "10.16.112.0/20"
+  
+  # Database Subnets #######################
+  SubnetDbA:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      AvailabilityZone: 
+        Fn::Select:
+          - 0
+          - Fn::GetAZs: !Ref "AWS::Region" 
+      VpcId: !Ref GhostVPC
+      CidrBlock: "10.16.32.0/20"
+  SubnetDbB:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      AvailabilityZone: 
+        Fn::Select:
+          - 1
+          - Fn::GetAZs: !Ref "AWS::Region" 
+      VpcId: !Ref GhostVPC
+      CidrBlock: "10.16.80.0/20"
+  SubnetDbC:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      AvailabilityZone: 
+        Fn::Select:
+          - 2
+          - Fn::GetAZs: !Ref "AWS::Region" 
+      VpcId: !Ref GhostVPC
+      CidrBlock: "10.16.128.0/20"
+
+  # Public Subnets ############################
+
+  SubnetPublicA:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      VpcId: !Ref GhostVPC
+      CidrBlock: "10.16.144.0/20"
+  SubnetPublicB:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      VpcId: !Ref GhostVPC
+      CidrBlock: "10.16.160.0/20"
+  SubnetPublicC:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      AvailabilityZone: !Select [2, !GetAZs ""]
+      VpcId: !Ref GhostVPC
+      CidrBlock: "10.16.176.0/20"
+
+  #################################################
+  # Identity and Access management ################
+  #################################################
+
+  InstanceRoleWp:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonElasticFileSystemClientReadWriteAccess"
+
+  InstanceProfileWp:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref InstanceRoleWp
+
+  InstanceRoleDb:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+
+  InstanceProfileDb:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref InstanceRoleDb
+
+  #######################################
+  # Compute #############################
+  #######################################
+
+  LaunchTemplateWP:
+    Type: "AWS::EC2::LaunchTemplate"
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          wordpress_setup:
+            - setup_cfn
+            - install_wordpress
+            - configure_wordpress
+        setup_cfn:
+          files:
+            /etc/cfn/cfn-hup.conf:
+              content: !Sub |
+                [main]
+                stack= ${AWS::StackId}
+                region= ${AWS::Region}
+              group: "root"
+              owner:  "root"
+              mode: "000400"
+            /etc/cfn/hooks.d/cfn-auto-reloader.conf:
+              content: !Sub |
+                [cfn-auto-reloader-hook]
+                triggers=post.update
+                path=Resources.LaunchTemplateWP.Metadata.AWS::CloudFormation::Init
+                action=/opt/aws/bin/cfn-init -v --stack ${AWS::StackId} --resource LaunchTemplateWP --configsets wordpress_setup --region ${AWS::Region}
+              group: "root"
+              owner:  "root"
+              mode: "000400"
+            /etc/systemd/system/cfn-hup.service:
+              content: |
+                [Unit]
+                Description=cfn-hup daemon
+                [Service]
+                Type=simple
+                ExecStart=/opt/aws/bin/cfn-hup
+                Restart=always
+                [Install]
+                WantedBy=multi-user.target
+              mode: "000644"
+              owner: root
+              group: root
+          commands:
+            01_enable_cfn_hup:
+              command: systemctl daemon-reload && systemctl enable --now cfn-hup
+        install_wordpress:
+          commands:
+            0_manual_installs:
+              command: dnf install -y httpd php php-fpm php-mysqli php-json amazon-efs-utils 
+          sources:
+            /var/www/html:  https://wordpress.org/latest.tar.gz
+          files:
+            /tmp/create-wp-config:
+              content: !Sub |
+                #!/bin/bash -xe
+                cp /var/www/html/wp-config-sample.php /var/www/html/wp-config.php
+                sed -i "s/'database_name_here'/'${DBName}'/g" wp-config.php
+                sed -i "s/'username_here'/'${DBUser}'/g" wp-config.php
+                sed -i "s/'password_here'/'${DBPassword}'/g" wp-config.php
+                sed -i "s/'localhost'/'${DBInstance.PrivateIp}'/g" wp-config.php                                    
+              group: root
+              mode: '000500'
+              owner: root 
+        configure_wordpress:
+          files:
+            /tmp/permissionsfix:
+              content: |
+                #!/bin/bash -xe
+                usermod -a -G apache ec2-user   
+                chown -R ec2-user:apache /var/www
+                chmod 2775 /var/www
+                find /var/www -type d -exec chmod 2775 {} \;
+                find /var/www -type f -exec chmod 0664 {} \;
+              group: root
+              mode: '000500'
+              owner: root
+          commands:
+            00_mount_efs:
+              command: !Sub |
+                mkdir -p /var/www/html/wp-content
+                grep -q "${EFS}:/" /etc/fstab || echo "${EFS}:/ /var/www/html/wp-content efs _netdev,tls 0 0" >> /etc/fstab
+                mountpoint -q /var/www/html/wp-content || mount /var/www/html/wp-content
+            01_move_wordpress:
+              command: |
+                cd /var/www/html/wordpress
+                find . -mindepth 1 -maxdepth 1 ! -name wp-content -exec cp -rf {} /var/www/html/ \;
+                if [ -z "$(ls -A /var/www/html/wp-content)" ]; then cp -rf wp-content/. /var/www/html/wp-content/; fi
+            02_tidyup:
+              command: |
+                rm -rf /var/www/html/wordpress
+            03_configure_wordpress:
+              command: /tmp/create-wp-config
+              cwd: /var/www/html
+            04_fix_permissions:
+              command: /tmp/permissionsfix
+            05_start_services:
+              command: systemctl enable --now php-fpm httpd
+            06_cleanup:
+              command: rm -f /tmp/create-wp-config
+
+    Properties:
+      LaunchTemplateData:
+        CreditSpecification:
+          CpuCredits: "standard"
+        IamInstanceProfile: 
+          Arn: !GetAtt InstanceProfileWp.Arn
+        ImageId: "ami-06aad1f84b1a6bce9"
+        InstanceType: "t3.micro"
+        SecurityGroupIds: [!GetAtt AppSecurityGroup.GroupId]
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash -xe
+            /opt/aws/bin/cfn-init -v --stack ${AWS::StackId} --resource LaunchTemplateWP --configsets wordpress_setup --region ${AWS::Region}
+            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackId} --resource AutoScalingGroupWP --region ${AWS::Region}
+
+  AutoScalingGroupWP:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn:
+      - PrivateDefaultRoute
+      - SubnetRouteTableAssociationAppA
+      - SubnetRouteTableAssociationAppB
+      - SubnetRouteTableAssociationAppC
+      - MountTargetA
+      - MountTargetB
+      - MountTargetC
+    CreationPolicy:
+      ResourceSignal:
+        Count: 1
+        Timeout: PT15M
+    Properties:
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 300
+      AvailabilityZoneDistribution: 
+        CapacityDistributionStrategy: "balanced-best-effort"
+      Cooldown: "360"
+      DesiredCapacity: "1"
+      LaunchTemplate: 
+        LaunchTemplateId: !Ref LaunchTemplateWP
+        Version: !GetAtt LaunchTemplateWP.LatestVersionNumber
+      MaxSize: "3"
+      # MetricsCollection: 
+      #   - MetricsCollection
+      MinSize: "1"
+      TargetGroupARNs: 
+        - !GetAtt TargetGroupALB.TargetGroupArn
+      VPCZoneIdentifier: 
+        - !Ref SubnetAppA
+        - !Ref SubnetAppB
+        - !Ref SubnetAppC
+
+
+  DBInstance:
+    Type: AWS::EC2::Instance
+    DependsOn:
+      - PrivateDefaultRoute
+      - SubnetRouteTableAssociationDBA
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT15M
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          mysql_setup:
+            - setup_cfn
+            - install_mysql
+            - configure_mysql
+        setup_cfn:
+          files:
+            /etc/cfn/cfn-hup.conf:
+              content: !Sub |
+                [main]
+                stack= ${AWS::StackId}
+                region= ${AWS::Region}
+              group: "root"
+              owner:  "root"
+              mode: "000400"
+            /etc/cfn/hooks.d/cfn-auto-reloader.conf:
+              content: !Sub |
+                [cfn-auto-reloader-hook]
+                triggers=post.update
+                path=Resources.DBInstance.Metadata.AWS::CloudFormation::Init
+                action=/opt/aws/bin/cfn-init -v --stack ${AWS::StackId} --resource DBInstance --configsets mysql_setup --region ${AWS::Region}
+              group: "root"
+              owner:  "root"
+              mode: "000400"
+            /etc/systemd/system/cfn-hup.service:
+              content: |
+                [Unit]
+                Description=cfn-hup daemon
+                [Service]
+                Type=simple
+                ExecStart=/opt/aws/bin/cfn-hup
+                Restart=always
+                [Install]
+                WantedBy=multi-user.target
+              mode: "000644"
+              owner: root
+              group: root
+          commands:
+            01_enable_cfn_hup:
+              command: systemctl daemon-reload && systemctl enable --now cfn-hup
+        install_mysql:
+          commands:
+            01_install_mariadb:
+              command: dnf install -y mariadb105-server
+            02_start_mariadb:
+              command: systemctl enable --now mariadb
+        configure_mysql:
+          files:
+            /tmp/db.setup:
+              content: !Sub |
+                CREATE DATABASE IF NOT EXISTS ${DBName};
+                CREATE USER IF NOT EXISTS '${DBUser}'@'10.16.%' IDENTIFIED BY '${DBPassword}';
+                GRANT ALL PRIVILEGES ON ${DBName}.* TO '${DBUser}'@'10.16.%';
+                FLUSH PRIVILEGES;
+              mode: "000400"
+              owner: root
+              group: root
+          commands:
+            01_set_mysql_root_password:
+              command: !Sub |
+                mysqladmin -u root password '${DBRootPassword}'
+              test: !Sub |
+                $(mysql ${DBName} -u root --password='${DBRootPassword}' >/dev/null 2>&1 </dev/null); (( $? != 0 ))
+            02_create_database:
+              command: !Sub |  
+                mysql -u root --password='${DBRootPassword}' < /tmp/db.setup
+              test: !Sub |
+                $(mysql ${DBName} -u root --password='${DBRootPassword}' >/dev/null 2>&1 </dev/null); (( $? !=0))
+
+    Properties:
+      IamInstanceProfile: !Ref InstanceProfileDb
+      CreditSpecification:
+        CPUCredits: "standard"
+      ImageId: "ami-06aad1f84b1a6bce9"
+      InstanceType: "t3.micro"
+      SecurityGroupIds: [ !GetAtt DbSecurityGroup.GroupId]
+      SubnetId: !Ref SubnetDbA
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          /opt/aws/bin/cfn-init -v --stack ${AWS::StackId} --resource DBInstance --configsets mysql_setup --region ${AWS::Region}
+          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackId} --resource DBInstance --region ${AWS::Region}
+
+  #################################################
+  # Application Load Balancer #####################
+  #################################################
+
+  AppLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    DependsOn: GatewayAttachment
+    Properties:
+      Type: "application"
+      IpAddressType: "ipv4"
+      Scheme: "internet-facing"
+      SecurityGroups: 
+        - !GetAtt ALBSecurityGroup.GroupId
+      Subnets: 
+        - !Ref SubnetPublicA
+        - !Ref SubnetPublicB
+        - !Ref SubnetPublicC
+
+  ListenerALB:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !GetAtt AppLoadBalancer.LoadBalancerArn
+      Port: 80
+      Protocol: "HTTP"
+      DefaultActions:
+        - TargetGroupArn: !GetAtt TargetGroupALB.TargetGroupArn
+          Type: "forward"
+
+  TargetGroupALB:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckEnabled: true
+      HealthCheckPath: "/"
+      Matcher:
+        HttpCode: "200-399"
+      HealthCheckProtocol: "HTTP"
+      IpAddressType: "ipv4"
+      Port: 80
+      Protocol: "HTTP"
+      ProtocolVersion: "HTTP1"
+      TargetType: "instance"
+      VpcId: !Ref GhostVPC
+
+
+  #############################################
+  # Elastic FileSystem ########################
+  #############################################
+
+  EFS:
+    Type: "AWS::EFS::FileSystem"
+    Properties:
+      PerformanceMode: "generalPurpose"
+      ThroughputMode: "bursting"
+      Encrypted: true
+      BackupPolicy: 
+        Status: "DISABLED"
+      LifecyclePolicies:
+        - TransitionToIA: "AFTER_90_DAYS"
+      FileSystemTags:
+        - Key: "Name"
+          Value: "wordpress-efs"
+  
+  MountTargetA:
+    Type: "AWS::EFS::MountTarget"
+    Properties:
+      FileSystemId: !Ref EFS
+      IpAddressType: "IPV4_ONLY"
+      SecurityGroups: 
+        - !GetAtt EfsSecurityGroup.GroupId
+      SubnetId: !Ref SubnetEfsA
+  MountTargetB:
+    Type: "AWS::EFS::MountTarget"
+    Properties:
+      FileSystemId: !Ref EFS
+      IpAddressType: "IPV4_ONLY"
+      SecurityGroups: 
+        - !GetAtt EfsSecurityGroup.GroupId
+      SubnetId: !Ref SubnetEfsB
+  MountTargetC:
+    Type: "AWS::EFS::MountTarget"
+    Properties:
+      FileSystemId: !Ref EFS
+      IpAddressType: "IPV4_ONLY"
+      SecurityGroups: 
+        - !GetAtt EfsSecurityGroup.GroupId
+      SubnetId: !Ref SubnetEfsC
+
+
+Outputs:
+  WordPressURL:
+    Value: !Sub "http://${AppLoadBalancer.DNSName}"
